@@ -11,6 +11,7 @@ import {
   resolveExistingAsarUnpackedEsbuildBinary,
   unpackedEsbuildBinaryFromPackageDir,
 } from "./compiler.js";
+import { PREBUILT_BUNDLES_FILENAME, writePrebuiltBundles } from "./prebuilt-bundles.js";
 
 const asarEsbuildDir = path.join("Resources", "app.asar", "node_modules", "esbuild");
 const temporaryDirectories: string[] = [];
@@ -1120,5 +1121,93 @@ it("preserves filesystem error metadata for a missing entry", async () => {
     errno: expect.any(Number),
     syscall: "realpath",
     path: server,
+  });
+});
+
+async function createManifestPlugin(id: string) {
+  const entries = await createSplitPlugin();
+  await writeFile(
+    path.join(entries.directory, "paseo-plugin.json"),
+    JSON.stringify({ id, requirements: { paseo: ">=0.11.0" } }),
+  );
+  return entries;
+}
+
+describe("prebuilt built-in bundles", () => {
+  it("runs a built-in from prebuilt bundles without compiling", async () => {
+    const { directory, server } = await createManifestPlugin("prebuilt-probe");
+    await writeFile(server, "export default function (");
+    await writePrebuiltBundles(directory, "0.13.2", {
+      serverBundle: "prebuilt server bundle",
+      clientBundle: "prebuilt client bundle",
+    });
+
+    await expect(
+      compileDirectoryPlugin(directory, "0.13.2", "prebuilt-probe"),
+    ).resolves.toMatchObject({
+      serverBundle: "prebuilt server bundle",
+      clientBundle: "prebuilt client bundle",
+    });
+  });
+
+  it("ignores prebuilt bundles outside the built-in registry", async () => {
+    const { directory } = await createManifestPlugin("installed-probe");
+    await writePrebuiltBundles(directory, "0.13.2", {
+      serverBundle: "prebuilt server bundle",
+      clientBundle: "prebuilt client bundle",
+    });
+
+    const bundles = await compileDirectoryPlugin(directory, "0.13.2");
+    expect(bundles.serverBundle).toContain("Server contribution");
+    expect(bundles.clientBundle).toContain("Client contribution");
+  });
+
+  it("recompiles a built-in for another daemon version", async () => {
+    const { directory } = await createManifestPlugin("versioned-probe");
+    await writePrebuiltBundles(directory, "0.13.2", {
+      serverBundle: "prebuilt server bundle",
+      clientBundle: "prebuilt client bundle",
+    });
+
+    const bundles = await compileDirectoryPlugin(directory, "0.14.0", "versioned-probe");
+    expect(bundles.serverBundle).toContain("Server contribution");
+  });
+
+  it("recompiles a built-in whose sources changed after the bundles were built", async () => {
+    const { directory } = await createManifestPlugin("stale-probe");
+    await writePrebuiltBundles(directory, "0.13.2", {
+      serverBundle: "prebuilt server bundle",
+      clientBundle: "prebuilt client bundle",
+    });
+    await writeFile(
+      path.join(directory, "shared", "labels.ts"),
+      'export const clientLabel = "Client contribution";\nexport const serverLabel = "Rebuilt contribution";',
+    );
+
+    const bundles = await compileDirectoryPlugin(directory, "0.13.2", "stale-probe");
+    expect(bundles.serverBundle).toContain("Rebuilt contribution");
+  });
+
+  it("recompiles a built-in with partial or unreadable prebuilt bundles", async () => {
+    const { directory } = await createManifestPlugin("damaged-probe");
+    const sidecar = path.join(directory, PREBUILT_BUNDLES_FILENAME);
+    await writePrebuiltBundles(directory, "0.13.2", {
+      serverBundle: "prebuilt server bundle",
+      clientBundle: null,
+    });
+
+    let bundles = await compileDirectoryPlugin(directory, "0.13.2", "damaged-probe");
+    expect(bundles.serverBundle).toContain("Server contribution");
+
+    await writeFile(sidecar, "{");
+    bundles = await compileDirectoryPlugin(directory, "0.13.2", "damaged-probe");
+    expect(bundles.serverBundle).toContain("Server contribution");
+
+    await writeFile(
+      sidecar,
+      JSON.stringify({ version: "0.13.2", fingerprint: "0".repeat(64), serverBundle: "x" }),
+    );
+    bundles = await compileDirectoryPlugin(directory, "0.13.2", "damaged-probe");
+    expect(bundles.serverBundle).toContain("Server contribution");
   });
 });

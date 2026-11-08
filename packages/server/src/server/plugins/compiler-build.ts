@@ -5,6 +5,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { isBuiltin } from "node:module";
 import path from "node:path";
 import { createPluginImportReader, type PluginImportKind } from "./compiler-imports.js";
+import { readPrebuiltBundles } from "./prebuilt-bundles.js";
 import type { Metafile, OnResolveResult, Plugin } from "esbuild";
 import {
   isPluginClientOnlySdkSpecifier,
@@ -445,6 +446,14 @@ export async function compileDirectoryPlugin(
     throw new Error(`Built-in plugin ${builtinId} has manifest ID ${manifest.id}`);
   }
   assertPluginCompatibility({ ...manifest, version, runtime: "daemon" });
-  const bundles = await compilePlugin(await resolveEntryPaths(directory));
+  const entries = await resolveEntryPaths(directory);
+  const prebuilt =
+    builtinId === undefined
+      ? null
+      : await readPrebuiltBundles(directory, {
+          version,
+          entries: { server: entries.server !== null, client: entries.client !== null },
+        });
+  const bundles = prebuilt ?? (await compilePlugin(entries));
   return { ...bundles, manifest };
 }

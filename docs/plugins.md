@@ -112,6 +112,12 @@ one because it resolves through the repository's `node_modules`.
 The packaged-app smoke check requires every listed built-in to start without relying on
 account credentials.
 
+`build:lib` compiles every listed built-in into `paseo-prebuilt-bundles.json` beside its manifest
+(`npm run build:builtins`), so a packaged daemon starts without running esbuild. The sidecar records
+the daemon version and a hash of the plugin directory; either mismatch compiles from source. Only
+listed built-ins read it — installed plugins always compile, so a shipped bundle cannot skip the
+[SDK import boundaries](#sdk-import-boundaries).
+
 Built-ins run in process and remain active independently of `pluginsEnabled`. They are
 absent from the installed plugin list and source configuration; their client bundles
 appear in the plugin catalog. Editing one in development requires a daemon restart.

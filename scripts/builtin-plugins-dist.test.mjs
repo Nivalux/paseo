@@ -10,6 +10,7 @@ import {
   resolveBuiltinPluginsRoot,
 } from "../packages/server/dist/server/server/plugins/builtin/index.js";
 import { compilePlugin } from "../packages/server/dist/server/server/plugins/compiler.js";
+import { readPrebuiltBundles } from "../packages/server/dist/server/server/plugins/prebuilt-bundles.js";
 import { readPluginManifest } from "../packages/server/dist/server/server/plugins/manifest.js";
 import { PluginRuntime } from "../packages/server/dist/server/server/plugins/runtime.js";
 
@@ -22,6 +23,15 @@ async function findEntry(directory, names) {
     if ((await stat(entry).catch(() => null))?.isFile()) return entry;
   }
   return null;
+}
+
+function withoutSourceLabels(code) {
+  return (
+    code
+      ?.split("\n")
+      .filter((line) => !line.startsWith("// "))
+      .join("\n") ?? null
+  );
 }
 
 test("built output compiles and starts every listed built-in", async () => {
@@ -61,11 +71,27 @@ test("built output compiles and starts every listed built-in", async () => {
     for (const id of builtinPlugins) {
       const directory = path.join(packagedRoot, id);
       assert.equal((await readPluginManifest(directory)).id, id);
-      const bundles = await compilePlugin({
+      const entries = {
         server: await findEntry(directory, ["index.server.ts", "index.server.tsx"]),
         client: await findEntry(directory, ["index.client.ts", "index.client.tsx"]),
-      });
+      };
+      const bundles = await compilePlugin(entries);
       assert.ok(bundles.serverBundle, `${id} must compile a server bundle`);
+      const prebuilt = await readPrebuiltBundles(directory, {
+        version,
+        entries: { server: Boolean(entries.server), client: Boolean(entries.client) },
+      });
+      assert.ok(prebuilt, `${id} must ship prebuilt bundles current with this build`);
+      assert.equal(
+        withoutSourceLabels(prebuilt.serverBundle),
+        withoutSourceLabels(bundles.serverBundle),
+        `${id} prebuilt server bundle must match a fresh compile`,
+      );
+      assert.equal(
+        withoutSourceLabels(prebuilt.clientBundle),
+        withoutSourceLabels(bundles.clientBundle),
+        `${id} prebuilt client bundle must match a fresh compile`,
+      );
       await runtime.startBuiltinPlugin({ id, directory });
       assert.ok(runtime.catalog().some((plugin) => plugin.id === id));
       if (id.endsWith("-usage-source")) {
